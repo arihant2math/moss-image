@@ -1,0 +1,105 @@
+name: Build Ubuntu 24.04 ARM image
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/ubuntu.yml
+
+permissions:
+  contents: read
+
+jobs:
+  build-image:
+    runs-on: ubuntu-latest
+    env:
+      ROOTFS_URL: https://cloud-images.ubuntu.com/wsl/releases/24.04/current/ubuntu-noble-wsl-arm64-wsl.rootfs.tar.gz
+      IMAGE_NAME: ubuntu-noble-arm64.img
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y parted e2fsprogs
+
+      - name: Build raw Ubuntu image
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          WORKDIR="$RUNNER_TEMP/ubuntu-rootfs"
+          TARBALL="$WORKDIR/rootfs.tar.gz"
+          MNT="$WORKDIR/mnt"
+          IMG="dist/${IMAGE_NAME}"
+
+          mkdir -p "$WORKDIR" dist
+          export TARBALL
+
+          curl -L --fail --retry 5 --retry-delay 5 "$ROOTFS_URL" -o "$TARBALL"
+
+          ROOTFS_BYTES="$(python3 - <<'PY'
+import os
+import tarfile
+
+payload_bytes = 0
+with tarfile.open(os.environ['TARBALL'], 'r|gz') as archive:
+    for member in archive:
+        if member.isreg():
+            payload_bytes += member.size
+
+print(payload_bytes)
+PY
+          )"
+
+          ROOTFS_MB="$(( (ROOTFS_BYTES + 1024 * 1024 - 1) / 1024 / 1024 ))"
+          IMG_MB="$(( ROOTFS_MB + ROOTFS_MB / 2 + 1024 ))"
+
+          if [ "$IMG_MB" -lt 3072 ]; then
+            IMG_MB=3072
+          fi
+
+          IMG_MB="$(( (IMG_MB + 63) / 64 * 64 ))"
+
+          echo "Root filesystem payload: ${ROOTFS_MB} MiB"
+          echo "Allocating image: ${IMG_MB} MiB"
+
+          dd if=/dev/zero of="$IMG" bs=1M count="$IMG_MB" status=progress
+
+          sudo parted --script "$IMG" \
+            mklabel msdos \
+            mkpart primary ext4 1MiB 100%
+
+          LOOP_DEVICE="$(sudo losetup --find --show --partscan "$IMG")"
+          PARTITION="${LOOP_DEVICE}p1"
+
+          cleanup() {
+            sudo umount "$MNT" 2>/dev/null || true
+            sudo losetup -d "$LOOP_DEVICE" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          sudo udevadm settle
+          sudo mkfs.ext4 -F -m 0 -L UBUNTUROOT "$PARTITION"
+          sudo mkdir -p "$MNT"
+          sudo mount "$PARTITION" "$MNT"
+
+          sudo tar --xattrs --xattrs-include='*' --numeric-owner -xpf "$TARBALL" -C "$MNT"
+
+          sync
+          sudo umount "$MNT"
+          sudo losetup -d "$LOOP_DEVICE"
+          trap - EXIT
+
+          sha256sum "$IMG" | tee "${IMG}.sha256"
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ubuntu-noble-arm64-image
+          path: |
+            dist/*.img
+            dist/*.sha256
+          retention-days: 7
