@@ -41,17 +41,17 @@ jobs:
           curl -L --fail --retry 5 --retry-delay 5 "$ROOTFS_URL" -o "$TARBALL"
 
           ROOTFS_BYTES="$(python3 - <<'PY'
-import os
-import tarfile
+          import os
+          import tarfile
 
-payload_bytes = 0
-with tarfile.open(os.environ['TARBALL'], 'r|gz') as archive:
-    for member in archive:
-        if member.isreg():
-            payload_bytes += member.size
+          payload_bytes = 0
+          with tarfile.open(os.environ['TARBALL'], 'r|gz') as archive:
+              for member in archive:
+                  if member.isreg():
+                      payload_bytes += member.size
 
-print(payload_bytes)
-PY
+          print(payload_bytes)
+          PY
           )"
 
           ROOTFS_MB="$(( (ROOTFS_BYTES + 1024 * 1024 - 1) / 1024 / 1024 ))"
