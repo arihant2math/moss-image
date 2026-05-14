@@ -23,7 +23,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y parted e2fsprogs
+          sudo apt-get install -y e2fsprogs
 
       - name: Build raw ArchLinuxARM image
         shell: bash
@@ -68,12 +68,7 @@ jobs:
 
           dd if=/dev/zero of="$IMG" bs=1M count="$IMG_MB" status=progress
 
-          sudo parted --script "$IMG" \
-            mklabel msdos \
-            mkpart primary ext4 1MiB 100%
-
-          LOOP_DEVICE="$(sudo losetup --find --show --partscan "$IMG")"
-          PARTITION="${LOOP_DEVICE}p1"
+          LOOP_DEVICE="$(sudo losetup --find --show "$IMG")"
 
           cleanup() {
             sudo umount "$MNT" 2>/dev/null || true
@@ -81,10 +76,9 @@ jobs:
           }
           trap cleanup EXIT
 
-          sudo udevadm settle
-          sudo mkfs.ext4 -F -m 0 -L ARCHROOT "$PARTITION"
+          sudo mkfs.ext4 -F -m 0 -L ARCHROOT "$LOOP_DEVICE"
           sudo mkdir -p "$MNT"
-          sudo mount "$PARTITION" "$MNT"
+          sudo mount "$LOOP_DEVICE" "$MNT"
 
           sudo tar --xattrs --xattrs-include='*' --numeric-owner -xpf "$TARBALL" -C "$MNT"
 
